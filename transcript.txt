@@ -1,0 +1,72 @@
+============================================================
+GOAL: I'm flying from London (LHR). Plan a 3-night trip to Porto
+      under €600 total. Give me the best flight and a hotel that
+      fits the budget, and confirm whether the total is within €600.
+------------------------------------------------------------
+
+[step 1] Calling model ...
+  TOOL CALL  -> search_flights({'origin': 'LHR', 'destination': 'OPO'})
+  TOOL RESULT<- {"route": "LHR->OPO", "options": [
+    {"airline": "TAP Air Portugal", "flight": "TP1355", "price_eur": 89,  "duration_h": 2.5},
+    {"airline": "Ryanair",          "flight": "FR8821", "price_eur": 62,  "duration_h": 2.7},
+    {"airline": "EasyJet",          "flight": "U28801", "price_eur": 74,  "duration_h": 2.6}
+  ]}
+
+[step 2] Calling model ...
+  TOOL CALL  -> search_hotels({'city': 'porto', 'nights': 3})
+  TOOL RESULT<- {"city": "porto", "nights": 3, "options": [
+    {"name": "Maison Particuliere",  "stars": 4, "price_per_night_eur": 95,  "total_eur": 285, "area": "Ribeira"},
+    {"name": "Hotel Infante Sagres", "stars": 5, "price_per_night_eur": 185, "total_eur": 555, "area": "Downtown"},
+    {"name": "Porto A-S 1829",       "stars": 4, "price_per_night_eur": 110, "total_eur": 330, "area": "Aliados"},
+    {"name": "Gallery Hostel",       "stars": 3, "price_per_night_eur": 45,  "total_eur": 135, "area": "Bonfim"}
+  ]}
+
+[step 3] Calling model ...
+  TOOL CALL  -> calculate({'expression': '62 + 285'})
+  TOOL RESULT<- {"expression": "62 + 285", "result": 347}
+
+[step 4] Calling model ...
+
+[step 4] Model returned final answer.
+
+============================================================
+STRUCTURED OUTPUT
+============================================================
+{
+  "destination": "porto",
+  "duration_nights": 3,
+  "budget_eur": 600,
+  "flight": {
+    "airline": "Ryanair",
+    "flight_number": "FR8821",
+    "origin": "LHR",
+    "destination": "OPO",
+    "price_eur": 62
+  },
+  "hotel": {
+    "name": "Maison Particuliere",
+    "stars": 4,
+    "area": "Ribeira",
+    "price_per_night_eur": 95,
+    "total_eur": 285
+  },
+  "cost_breakdown": {
+    "flight_eur": 62,
+    "hotel_eur": 285,
+    "total_eur": 347
+  },
+  "within_budget": true,
+  "notes": "3-night Porto trip via Ryanair LHR->OPO staying at the 4-star Maison Particuliere in Ribeira totals 347 EUR, comfortably within the 600 EUR budget."
+}
+
+============================================================
+SAFETY DEMO -- argument injection attempt
+============================================================
+Calling calculate with a malicious expression:
+  Result: {'error': "Expression contains potentially dangerous token: \"__import__('os').system('rm -rf /')\""} 
+
+Calling search_flights with an invalid IATA code:
+  Result: {'error': "'origin' must be a 3-letter IATA code (got \"LH'; DROP TABLE flights;--\")."} 
+
+Calling search_hotels with an unknown city:
+  Result: {'error': "Unknown city 'atlantis'. Supported cities: ['lisbon', 'london', 'madrid', 'paris', 'porto']."} 

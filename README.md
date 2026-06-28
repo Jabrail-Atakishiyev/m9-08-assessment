@@ -1,66 +1,160 @@
-![logo_ironhack_blue 7](https://user-images.githubusercontent.com/23629340/40541063-a07a0a8a-601a-11e8-91b5-2f13e4e6b441.png)
-
 # Assessment | Ship a Multi-Tool Agent
 
-## Overview
+## Scenario: Trip Concierge
 
-This is your chance to put the second half of the unit together. You'll build a small but genuinely useful **agent** that uses **three tools** to accomplish a real, multi-step goal — deciding its own steps, the way an agent should — and returns a **structured result**. Then you'll show you understand the grown-up parts: one reliability safeguard and one safety mitigation.
+**Tools chosen:** `search_flights`, `search_hotels`, `calculate`
 
-No RAG is required here. This is about **agents and tool use**: an agent that reasons, calls tools, and acts.
+I chose the trip-concierge scenario because it requires genuine multi-step
+reasoning: the agent must gather two independent data sources (flights, hotels),
+perform arithmetic to combine them, and then make a budget judgement — none of
+which can be answered in a single tool call. The three tools have clear,
+non-overlapping responsibilities, which makes the agent's decision-making
+visible in the trace.
 
-## What You'll Build
+### Tool responsibilities
 
-An agent (use **Google ADK**, or a hand-rolled loop if you prefer — your choice) that:
+| Tool | Job |
+|---|---|
+| `search_flights(origin, destination)` | Returns available flights on a route with prices in EUR |
+| `search_hotels(city, nights)` | Returns hotel options with per-night price and total stay cost |
+| `calculate(expression)` | Evaluates arithmetic to sum costs and check budget |
 
-- has **three tools** it can call,
-- is given a **multi-step goal** it can't satisfy with a single tool call,
-- **decides for itself** which tools to use and in what order,
-- returns a **structured final result** (e.g. a small JSON object or a clearly formatted report), and
-- is **bounded** (a step limit) and **guarded** (one safety mitigation you implement and explain).
+---
 
-### Pick a scenario (or invent your own)
+## Reliability
 
-Choose one that interests you — these are starting points, not requirements:
+**Step limit:** The agent loop is capped at `MAX_STEPS = 8`. After 8 iterations
+without a final answer the loop aborts and returns
+`{"error": "Agent could not complete goal within 8 steps."}`.
+This prevents an infinite loop if the model keeps requesting tools without
+converging, which can happen with free-tier rate-limit retries or ambiguous goals.
 
-- **Trip concierge** — tools: `search_flights`, `search_hotels`, `calculate`. Goal: "Plan a 3-day trip to Porto under €600 and give me the total." Output: a structured itinerary with a cost breakdown.
-- **Order assistant** — tools: `lookup_order`, `check_warranty`, `calculate`. Goal: "I want two more of my last order — total cost, and is it still under warranty?" Output: a structured summary.
-- **Study planner** — tools: `list_topics`, `estimate_effort`, `calculate`. Goal: "Build me a study plan for the exam with total hours." Output: a structured plan.
+**Graceful tool-error handling:** Every tool call is wrapped in a `try/except`
+inside the loop. If a tool raises an unexpected exception the loop catches it,
+wraps it in `{"error": "..."}`, appends it as a tool result, and lets the model
+decide how to proceed rather than crashing the whole agent.
+If a tool explicitly returns `{"error": "..."}` (e.g. unknown route), the model
+sees the error message and can either try a different argument or tell the user
+it couldn't fulfil the request.
 
-Your tools can use small local data files (like the `orders.json` you've seen) or return mock data — the focus is the **agent's behaviour**, not a real backend.
+---
 
-## Requirements
+## Safety
 
-Your submission must include:
+**Mitigation: argument validation before every tool call**
 
-1. **A working agent** with three tools that solves the multi-step goal by its own tool choices (not a script you hardwired).
-2. **A structured output** — the final answer in a parseable, well-shaped form, not just free text.
-3. **A step limit** so the agent cannot loop forever, with a sensible cap.
-4. **One safety mitigation** that you implement and can justify — for example, treating tool results as untrusted data, validating a tool's arguments before acting, or requiring confirmation before a "destructive" tool runs.
-5. **A README** in your repo covering:
-   - which scenario and three tools you chose, and why,
-   - one **reliability** note (how your step limit / failure handling protects the run),
-   - one **safety** note (the mitigation you added and what attack it defends against),
-   - a captured run showing the agent's tool calls and structured result.
+Every tool validates its arguments against an allowlist or range check *before*
+any data lookup or `eval` is performed:
 
-## Submission
+- `search_flights` — IATA codes are checked with `re.fullmatch(r"[A-Z]{3}", code)`.
+  A SQL-injection-style string like `"LH'; DROP TABLE flights;--"` is caught and
+  rejected immediately.
+- `search_hotels` — city must be in a hard-coded `KNOWN_CITIES` set; `nights`
+  must be an integer between 1 and 30. Arbitrary strings or out-of-range numbers
+  are rejected.
+- `calculate` — the expression is checked against an allowlist regex
+  (`[0-9+\-*/.()\ %a-zA-Z_]+`) and a separate blocklist for dangerous tokens
+  (`__`, `import`, `exec`, `eval`, `open`, `os`, `sys`).
+  An injection attempt like `__import__('os').system('rm -rf /')` is blocked
+  before `eval` ever runs.
 
-Work on a branch, commit your code and README, open a Pull Request, and paste its link into the submission box.
+**What attack does this defend against?**
+A prompt-injection inside a flight description or hotel review could try to
+convince the model to call `calculate("__import__('os').listdir('/')")` or
+`search_hotels("../../../etc/passwd", 1)`. Validating every argument at the
+tool boundary means the model's text output cannot cause code execution or
+path traversal — the validation layer is independent of the model and cannot be
+overridden by anything in the conversation.
 
-**Deadline:** Sunday 28 June 2026, 23:59 local time. Late submissions are scored at 70% maximum.
+---
 
-## Grading Rubric (100 pts)
+## Captured Run
 
-| Area | What we look for | Points |
-|---|---|---|
-| **Agent works** | Three tools; the multi-step goal is solved by the agent's own tool choices | 30 |
-| **Structured output** | Final result is well-shaped and parseable, not free text | 15 |
-| **Reliability** | A working step limit; graceful handling when a tool fails or the goal can't be met | 20 |
-| **Safety** | A real mitigation, correctly implemented and clearly justified | 20 |
-| **README & run** | Clear tool choices, reliability + safety notes, and a captured run | 15 |
+```
+GOAL: I'm flying from London (LHR). Plan a 3-night trip to Porto under €600
+      total. Give me the best flight and a hotel that fits the budget, and
+      confirm whether the total is within €600.
+------------------------------------------------------------
 
-## Quality Bar
+[step 1] Calling model ...
+  TOOL CALL  -> search_flights({'origin': 'LHR', 'destination': 'OPO'})
+  TOOL RESULT<- {"route": "LHR->OPO", "options": [{"airline": "TAP Air Portugal", ...},
+                 {"airline": "Ryanair", "flight": "FR8821", "price_eur": 62, ...}, ...]}
 
-- The agent **decides its own steps** — reviewers should see tool calls it chose, not a fixed script
-- The output is genuinely **structured** and could be consumed by another program
-- Both the **step limit** and the **safety mitigation** actually run, and you can explain what each protects against
-- No API key is committed to the repo
+[step 2] Calling model ...
+  TOOL CALL  -> search_hotels({'city': 'porto', 'nights': 3})
+  TOOL RESULT<- {"city": "porto", "nights": 3, "options": [
+                 {"name": "Maison Particuliere", "price_per_night_eur": 95, "total_eur": 285, ...},
+                 {"name": "Gallery Hostel", "price_per_night_eur": 45, "total_eur": 135, ...}, ...]}
+
+[step 3] Calling model ...
+  TOOL CALL  -> calculate({'expression': '62 + 285'})
+  TOOL RESULT<- {"expression": "62 + 285", "result": 347}
+
+[step 4] Calling model ...
+
+[step 4] Model returned final answer.
+
+============================================================
+STRUCTURED OUTPUT
+============================================================
+{
+  "destination": "porto",
+  "duration_nights": 3,
+  "budget_eur": 600,
+  "flight": {
+    "airline": "Ryanair",
+    "flight_number": "FR8821",
+    "origin": "LHR",
+    "destination": "OPO",
+    "price_eur": 62
+  },
+  "hotel": {
+    "name": "Maison Particuliere",
+    "stars": 4,
+    "area": "Ribeira",
+    "price_per_night_eur": 95,
+    "total_eur": 285
+  },
+  "cost_breakdown": {
+    "flight_eur": 62,
+    "hotel_eur": 285,
+    "total_eur": 347
+  },
+  "within_budget": true,
+  "notes": "3-night Porto trip via Ryanair LHR->OPO staying at a 4-star Ribeira hotel totals €347, well within the €600 budget."
+}
+
+============================================================
+SAFETY DEMO - argument injection attempt
+============================================================
+Calling calculate with a malicious expression:
+  Result: {'error': "Expression contains potentially dangerous token: \"__import__('os').system('rm -rf /')\""} 
+
+Calling search_flights with an invalid IATA code:
+  Result: {'error': "'origin' must be a 3-letter IATA code (got \"LH'; DROP TABLE flights;--\")."} 
+
+Calling search_hotels with an unknown city:
+  Result: {'error': "Unknown city 'atlantis'. Supported cities: ['lisbon', 'london', 'madrid', 'paris', 'porto']."} 
+```
+
+---
+
+## How to Run
+
+```bash
+# 1. Clone and enter the repo
+git clone https://github.com/Jabrail-Atakishiyev/m9-08-assessment
+cd m9-08-assessment
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Set your Gemini API key (never commit this)
+export GOOGLE_API_KEY="your-free-gemini-key"
+
+# 4. Run the agent
+python agent.py
+```
+
+No API key is committed to the repository.
